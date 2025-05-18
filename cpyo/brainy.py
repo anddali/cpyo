@@ -3,8 +3,8 @@
 from abc import ABC, abstractmethod
 import inspect
 from typing import Callable, List, Dict, Any, Optional, get_type_hints
-
-from cpyo.memory import Messages
+import json
+from cpyo.memory import Message, Messages
 
 from .llm_providers import LLMProvider
 
@@ -167,8 +167,6 @@ class Agent(Tool):
             self.tool_map = {tool.name: tool for tool in tools}
             self.tool_schemas = [tool.to_schema() for tool in tools]
         
-        
-
     def run(self, input: str, **kwargs) -> str:
         """Run the agent with the given input.
         
@@ -180,6 +178,8 @@ class Agent(Tool):
         """
         # This is a default implementation that subclasses should override
         raise NotImplementedError("Agent subclasses must implement their own run method.")
+
+
 
 class ReActAgent(Agent):
     """Agent that uses a combination of reasoning and action."""
@@ -194,7 +194,7 @@ class ReActAgent(Agent):
         if messages is None:
             raise ValueError("Messages are required for ReAct agent.")
         reasoning_messages = messages.copy()
-        reasoning_messages.add_system_message(            
+        reasoning_messages.add_system_message(
             """Think step by step about how to solve this problem. 
             What information do you need? What tools might be helpful? 
             If multiple tools are needed, think about the sequence in which they should be used and how data might flow between them.
@@ -202,7 +202,8 @@ class ReActAgent(Agent):
             Responses should always reference where info comes from if the links if available.
             If no tools are needed, at the end of your reasoning, print \{tools_needed=False\}""")
         
-        yield {"status": "update", "message": "Developing reasoning strategy..."}        
+        yield {"status": "update", "message": "Developing reasoning strategy..."} 
+        print(json.dumps(reasoning_messages.get_messages(), indent=2))              
         reasoning_response = self.provider.generate(reasoning_messages.get_messages(), tools=self.tool_schemas, tool_choice="none", **kwargs)
         reasoning = self.provider.extract_content(reasoning_response)
         yield {"status": "update", "message": "Reasoning complete: " + reasoning}
@@ -211,8 +212,7 @@ class ReActAgent(Agent):
         current_messages.add_system_message("""Based on your reasoning: {reasoning}            
                                             
             Now take appropriate action to solve the problem. You can use multiple tools in sequence if needed.
-            If you need to use multiple tools, execute them one at a time and use the results from previous tools to inform subsequent tool calls.
-            Any time you need to answer knowledge questions, use the the enterprise search tool.
+            If you need to use multiple tools, execute them one at a time and use the results from previous tools to inform subsequent tool calls.            
             Take only one action at a time, wait for the results, then decide on the next action based on those results.""")
         
         max_iterations = 5  # Limit to prevent infinite loops
@@ -235,4 +235,61 @@ class ReActAgent(Agent):
             
             yield {"status": "update", "message": f"Found {len(tool_calls)} tool calls in iteration {iteration}."}
 
+            # Execute tools and collect responses
+            assistant_message = {"role": "assistant", "content": content}
+            
+            
+            assistant_message["tool_calls"] = action_response.choices[0].message.tool_calls
+            current_messages.add_message(Message(**assistant_message))
+            
+            # Process each tool call in this iteration
+            for tool_call in tool_calls:
+                try:
+                    if hasattr(tool_call, "function"):
+                        function_name = tool_call.function.name
+                        function_args = json.loads(tool_call.function.arguments)
+                        tool_call_id = tool_call.id
+                    else:
+                        function_name = tool_call["function"]["name"]
+                        function_args = json.loads(tool_call["function"]["arguments"])
+                        tool_call_id = tool_call["id"]
     
+                    yield {"status": "tool_call", "tool_name": function_name, "tool_args": function_args}
+                    
+                    # Execute the tool - either from the map or from the registry
+                    result = self.tool_map.get(function_name).run(**function_args) if function_name in self.tool_map else {"error": f"Tool {function_name} not found."}                  
+                        
+                    yield {"status": "update", "message": f"Tool {function_name} execution complete."+f" Result: {result}"[:100]}
+    
+                    tool_response = self.provider.create_tool_response_message(
+                        tool_call_id,
+                        function_name,
+                        json.dumps(result)
+                    )
+                    current_messages.add_message(Message(**tool_response))
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    yield {"status": "error", "message": f"Error executing tool {function_name if 'function_name' in locals() else 'unknown'}: {error_msg}"}
+                    tool_response = self.provider.create_tool_response_message(
+                        tool_call_id if 'tool_call_id' in locals() else "unknown",
+                        function_name if 'function_name' in locals() else "unknown",
+                        json.dumps({"error": error_msg})
+                    )
+                    current_messages.add_message(Message(**tool_response))
+            
+            # After tools execution, ask if we need more tools or if we have the final answer
+            current_messages.add_system_message(
+                """Based on the tool results above, decide if:
+                1) You need to make additional tool calls to complete the task (if so, make the next appropriate tool call), or
+                2) You have all the information needed to provide a final answer (if so, provide your comprehensive final response with no tool calls).
+                
+                Make sure to review all previous tool results when making your decision.
+                """)        
+        # If we've reached max iterations without a final answer, synthesize from what we have
+        if final_output is None:
+            yield {"status": "update", "message": f"Reached maximum iterations ({max_iterations}). Synthesizing final answer..."}
+            final_response = self.provider.generate(current_messages.get_messages(), tools=self.tool_schemas, tool_choice="none", **kwargs)
+            final_output = self.provider.extract_content(final_response)
+        
+        yield {"status": "complete", "message": final_output}
