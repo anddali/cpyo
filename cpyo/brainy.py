@@ -2,9 +2,10 @@
 
 from abc import ABC, abstractmethod
 import inspect
-from typing import Callable, List, Dict, Any, Optional, get_type_hints
+from typing import Callable, Generator, List, Dict, Any, Optional, get_type_hints
 import json
-from cpyo.memory import Message, Messages
+from .event import AgentEvent, AgentEventType
+from .memory import Message, Messages
 
 from .llm_providers import LLMProvider
 
@@ -166,33 +167,94 @@ class Agent(Tool):
         else:
             self.tool_map = {tool.name: tool for tool in tools}
             self.tool_schemas = [tool.to_schema() for tool in tools]
-        
-    def run(self, input: str, **kwargs) -> str:
-        """Run the agent with the given input.
+
+    def _stream_final_response(self, messages, **kwargs) -> Generator[AgentEvent, None, None]:
+        """Stream the final response token by token.
         
         Args:
-            input (str): The user input to process.
+            messages: The current message context
+            **kwargs: Additional arguments for the provider
+            
+        Yields:
+            AgentEvent: Events containing partial response tokens and the final complete response
+        """
+        # Make sure the streaming parameter is enabled for the provider
+        kwargs["stream"] = True
+        
+        response_stream = self.provider.generate(
+            messages.get_messages(),
+            # tools=self.tool_schemas,
+            # tool_choice="none",
+            **kwargs
+        )
+        
+        full_response = ""
+        
+        # Different providers have different streaming implementations
+        # This is a generic approach that should work with OpenAI and similar providers
+        for chunk in response_stream:
+            if hasattr(chunk, "choices") and chunk.choices:
+                # Extract delta content if available
+                if hasattr(chunk.choices[0], "delta") and hasattr(chunk.choices[0].delta, "content"):
+                    token = chunk.choices[0].delta.content
+                    if token:
+                        full_response += token
+                        yield AgentEvent(
+                            AgentEventType.PARTIAL_RESPONSE,
+                            data={"token": token, "accumulated": full_response}
+                        )
+                # Some providers might provide different formats
+                elif hasattr(chunk.choices[0], "text"):
+                    token = chunk.choices[0].text
+                    if token:
+                        full_response += token
+                        yield AgentEvent(
+                            AgentEventType.PARTIAL_RESPONSE,
+                            data={"token": token, "accumulated": full_response}
+                        )
+        
+        # After streaming is complete, send the final complete response
+        yield AgentEvent(
+            AgentEventType.FINAL_RESPONSE,
+            message="Task complete",
+            data={"response": full_response}
+        )
+
+    def run(self, **kwargs) -> Generator[AgentEvent, None, None]:
+        """Run the agent.
             
         Returns:
-            str: The agent's response.
+            Generator[AgentEvent, None, None]: A generator that yields events during the agent's execution
         """
         # This is a default implementation that subclasses should override
         raise NotImplementedError("Agent subclasses must implement their own run method.")
 
 
-
 class ReActAgent(Agent):
-    """Agent that uses a combination of reasoning and action."""
+    """Agent that uses a combination of reasoning and action with improved progress reporting."""
     def __init__(self, name: str, description: str, provider: LLMProvider, tools: List[Tool]):
         super().__init__(name, description, provider, tools)
-        
+        self._token_buffer = []  # Buffer for collecting tokens when streaming
 
-    def run(self, **kwargs) -> Any: 
-        """Run the ReAct agent with the given input."""
-        yield {"status": "update", "message": "Starting IterativeReasonActAgent..."}
+    def run(self, **kwargs) -> Generator[AgentEvent, None, None]:
+        """Run the ReAct agent with the given input.
+        
+        Args:
+            **kwargs: Additional arguments including:
+                - messages: List of conversation messages
+                - stream: Boolean indicating whether to stream the final response
+                
+        Yields:
+            AgentEvent: Structured event objects providing updates on agent progress
+        """
+        stream = kwargs.pop("stream", False)
         messages = kwargs.pop("messages", None)
+        
         if messages is None:
-            raise ValueError("Messages are required for ReAct agent.")
+            yield AgentEvent(AgentEventType.ERROR, message="Messages are required for ReAct agent.")
+            return
+            
+        # Setup reasoning
         reasoning_messages = messages.copy()
         reasoning_messages.add_system_message(
             """Think step by step about how to solve this problem. 
@@ -202,18 +264,34 @@ class ReActAgent(Agent):
             Responses should always reference where info comes from if the links if available.
             If no tools are needed, at the end of your reasoning, print \{tools_needed=False\}""")
         
-        yield {"status": "update", "message": "Developing reasoning strategy..."} 
-        print(json.dumps(reasoning_messages.get_messages(), indent=2))              
-        reasoning_response = self.provider.generate(reasoning_messages.get_messages(), tools=self.tool_schemas, tool_choice="none", **kwargs)
+        yield AgentEvent(
+            AgentEventType.THINKING, 
+            message="Developing reasoning strategy..."
+        )
+              
+        reasoning_response = self.provider.generate(
+            reasoning_messages.get_messages(), 
+            tools=self.tool_schemas, 
+            tool_choice="none", 
+            **kwargs
+        )
         reasoning = self.provider.extract_content(reasoning_response)
-        yield {"status": "update", "message": "Reasoning complete: " + reasoning}
+        
+        yield AgentEvent(
+            AgentEventType.THINKING, 
+            message="Reasoning complete", 
+            data={"reasoning": reasoning}
+        )
 
+        # Setup action phase
         current_messages = messages.copy()
-        current_messages.add_system_message("""Based on your reasoning: {reasoning}            
+        current_messages.add_system_message(
+            f"""Based on your reasoning: {reasoning}            
                                             
             Now take appropriate action to solve the problem. You can use multiple tools in sequence if needed.
             If you need to use multiple tools, execute them one at a time and use the results from previous tools to inform subsequent tool calls.            
-            Take only one action at a time, wait for the results, then decide on the next action based on those results.""")
+            Take only one action at a time, wait for the results, then decide on the next action based on those results."""
+        )
         
         max_iterations = 5  # Limit to prevent infinite loops
         iteration = 0
@@ -221,29 +299,48 @@ class ReActAgent(Agent):
 
         while iteration < max_iterations:
             iteration += 1
-            yield {"status": "update", "message": f"Iteration {iteration}..."}
+            yield AgentEvent(
+                AgentEventType.PROGRESS, 
+                message=f"Starting iteration {iteration}",
+                iteration=iteration
+            )
             
             # Generate the next action based on the reasoning and current messages
-            action_response = self.provider.generate(current_messages.get_messages(), tools=self.tool_schemas, tool_choice="auto", **kwargs)
+            action_response = self.provider.generate(
+                current_messages.get_messages(), 
+                tools=self.tool_schemas, 
+                tool_choice="auto", 
+                **kwargs
+            )
             content = self.provider.extract_content(action_response)
             tool_calls = self.provider.extract_tool_calls(action_response)
             
             if not tool_calls:
-                    yield {"status": "update", "message": "Finalizing response..."}
-                    final_output = content
-                    break
+                if stream:
+                    # If we should stream the final response, process it differently
+                    yield from self._stream_final_response(current_messages, **kwargs)
+                else:
+                    yield AgentEvent(
+                        AgentEventType.FINAL_RESPONSE, 
+                        message="Task complete", 
+                        data={"response": content}
+                    )
+                return
             
-            yield {"status": "update", "message": f"Found {len(tool_calls)} tool calls in iteration {iteration}."}
+            yield AgentEvent(
+                AgentEventType.PROGRESS, 
+                message=f"Found {len(tool_calls)} tool calls",
+                iteration=iteration,
+                data={"tool_count": len(tool_calls)}
+            )
 
             # Execute tools and collect responses
             assistant_message = {"role": "assistant", "content": content}
-            
-            
             assistant_message["tool_calls"] = action_response.choices[0].message.tool_calls
             current_messages.add_message(Message(**assistant_message))
             
             # Process each tool call in this iteration
-            for tool_call in tool_calls:
+            for tool_idx, tool_call in enumerate(tool_calls):
                 try:
                     if hasattr(tool_call, "function"):
                         function_name = tool_call.function.name
@@ -254,12 +351,44 @@ class ReActAgent(Agent):
                         function_args = json.loads(tool_call["function"]["arguments"])
                         tool_call_id = tool_call["id"]
     
-                    yield {"status": "tool_call", "tool_name": function_name, "tool_args": function_args}
+                    yield AgentEvent(
+                        AgentEventType.TOOL_CALL, 
+                        message=f"Calling tool: {function_name}",
+                        iteration=iteration,
+                        data={
+                            "tool_name": function_name, 
+                            "tool_args": function_args,
+                            "tool_index": tool_idx,
+                            "tool_call_id": tool_call_id
+                        }
+                    )
                     
-                    # Execute the tool - either from the map or from the registry
-                    result = self.tool_map.get(function_name).run(**function_args) if function_name in self.tool_map else {"error": f"Tool {function_name} not found."}                  
+                    # Execute the tool
+                    if function_name in self.tool_map:
+                        if self.tool_map[function_name].tool_type == ToolType.FUNCTION:
+                            result = self.tool_map.get(function_name).run(**function_args)
+                        elif self.tool_map[function_name].tool_type == ToolType.AGENT:
+                            for event in self.tool_map[function_name].run(**kwargs):
+                                if event.event_type == AgentEventType.FINAL_RESPONSE:
+                                    result = event.data["response"]
+                                    break
+                                elif event.event_type == AgentEventType.ERROR:
+                                    result = {"error": event.message}
+                                    break
+                    else:
+                        result = {"error": f"Tool {function_name} not found."}
                         
-                    yield {"status": "update", "message": f"Tool {function_name} execution complete."+f" Result: {result}"[:100]}
+                    yield AgentEvent(
+                        AgentEventType.TOOL_RESULT,
+                        message=f"Tool {function_name} execution complete",
+                        iteration=iteration,
+                        data={
+                            "tool_name": function_name,
+                            "result": result,
+                            "tool_index": tool_idx,
+                            "tool_call_id": tool_call_id
+                        }
+                    )
     
                     tool_response = self.provider.create_tool_response_message(
                         tool_call_id,
@@ -270,7 +399,13 @@ class ReActAgent(Agent):
                     
                 except Exception as e:
                     error_msg = str(e)
-                    yield {"status": "error", "message": f"Error executing tool {function_name if 'function_name' in locals() else 'unknown'}: {error_msg}"}
+                    yield AgentEvent(
+                        AgentEventType.ERROR,
+                        message=f"Error executing tool {function_name if 'function_name' in locals() else 'unknown'}",
+                        iteration=iteration,
+                        data={"error": error_msg}
+                    )
+                    
                     tool_response = self.provider.create_tool_response_message(
                         tool_call_id if 'tool_call_id' in locals() else "unknown",
                         function_name if 'function_name' in locals() else "unknown",
@@ -285,11 +420,33 @@ class ReActAgent(Agent):
                 2) You have all the information needed to provide a final answer (if so, provide your comprehensive final response with no tool calls).
                 
                 Make sure to review all previous tool results when making your decision.
+                Make sure to that the final answer is conversational and easy to understand.
                 """)        
-        # If we've reached max iterations without a final answer, synthesize from what we have
-        if final_output is None:
-            yield {"status": "update", "message": f"Reached maximum iterations ({max_iterations}). Synthesizing final answer..."}
-            final_response = self.provider.generate(current_messages.get_messages(), tools=self.tool_schemas, tool_choice="none", **kwargs)
-            final_output = self.provider.extract_content(final_response)
         
-        yield {"status": "complete", "message": final_output}
+        # If we've reached max iterations without a final answer, synthesize from what we have
+        if iteration >= max_iterations:
+            yield AgentEvent(
+                AgentEventType.PROGRESS,
+                message=f"Reached maximum iterations ({max_iterations}). Synthesizing final answer...",
+                iteration=iteration
+            )
+            
+            if stream:
+                yield from self._stream_final_response(current_messages, **kwargs)
+            else:
+                final_response = self.provider.generate(
+                    current_messages.get_messages(), 
+                    tools=self.tool_schemas, 
+                    tool_choice="none", 
+                    **kwargs
+                )
+                final_output = self.provider.extract_content(final_response)
+                
+                yield AgentEvent(
+                    AgentEventType.FINAL_RESPONSE,
+                    message="Task complete (max iterations reached)",
+                    data={"response": final_output}
+                )
+
+    
+
