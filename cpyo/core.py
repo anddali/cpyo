@@ -331,14 +331,12 @@ class ReActAgent(Agent):
                         AgentEventType.FINAL_RESPONSE, 
                         message="Task complete", 
                         data={"response": content}
-                    )
-
-                
-                print("Current messages:")
-                for message in current_messages.get_messages():
-                    print("-----------------------------------------------------------------------------")
-                    for key, value in message.items():                    
-                        print(f"  {key}: {value}")
+                    )                
+                # print("Current messages:")
+                # for message in current_messages.get_messages():
+                #     print("-----------------------------------------------------------------------------")
+                #     for key, value in message.items():                    
+                #         print(f"  {key}: {value}")
                 return
             
             yield AgentEvent(
@@ -462,11 +460,11 @@ class ReActAgent(Agent):
                     data={"response": final_output}
                 )
                             
-            print("Current messages:")
-            for message in current_messages.get_messages():
-                print("-----------------------------------------------------------------------------")
-                for key, value in message.items():                    
-                    print(f"  {key}: {value}")
+            # print("Current messages:")
+            # for message in current_messages.get_messages():
+            #     print("-----------------------------------------------------------------------------")
+            #     for key, value in message.items():                    
+            #         print(f"  {key}: {value}")
                     
 
     

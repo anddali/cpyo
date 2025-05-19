@@ -148,12 +148,12 @@ python_executor = PythonTool(
 
 def main():
     memory = Messages()    
-    memory.add_system_message("You are a helpful assistant that can perform calculations and check traffic data.")
-    # memory.add_user_message("hats traffic like from endfield, ireland to carlow")
+    memory.add_system_message("You are a helpful assistant.")
+    
     provider = OpenAIProvider(api_key=api_key)
     agent = ReActAgent(
         name="ReActAgent",
-        description="Helpfull assistant that can perform calculations and check traffic data and search the web.",
+        description="Agent that can perform calculations and check traffic data, execute python code and search the web.",
         provider=provider,
         tools=[calculator, traffic_checker, web_search, python_executor]        
     )
