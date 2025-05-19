@@ -250,19 +250,19 @@ class ReActAgent(Agent):
         stream = kwargs.pop("stream", False)
         messages = kwargs.pop("messages", None)
         
-        if messages is None:
-            yield AgentEvent(AgentEventType.ERROR, message="Messages are required for ReAct agent.")
+        if messages is None or not isinstance(messages, Messages):
+            yield AgentEvent(AgentEventType.ERROR, message="Invalid messages provided.")
             return
             
         # Setup reasoning
         reasoning_messages = messages.copy()
         reasoning_messages.add_system_message(
-            """Think step by step about how to solve this problem. 
-            What information do you need? What tools might be helpful? 
-            If multiple tools are needed, think about the sequence in which they should be used and how data might flow between them.
-            Answers should be based primarily on tools responses even if they are contradictory, only when not found, use your own knowledge. 
-            Responses should always reference where info comes from if the links if available.
-            If no tools are needed, at the end of your reasoning, print \{tools_needed=False\}""")
+            """Do not answer the question yet. Analyze the question and think about how to approach it. What is user asking?
+            Think step by step what do you need to answer the question.
+            What is the problem? What are the subproblems?
+            What information do you need? What tools might be helpful from the ones that you have access to? 
+            If multiple tools are needed, think about the sequence in which they should be used and how data might flow between them.                        
+            """) #If no tools are needed, at the end of your reasoning, print \{tools_needed=False\}
         
         yield AgentEvent(
             AgentEventType.THINKING, 
@@ -314,7 +314,14 @@ class ReActAgent(Agent):
             )
             content = self.provider.extract_content(action_response)
             tool_calls = self.provider.extract_tool_calls(action_response)
-            
+
+            yield AgentEvent(
+                AgentEventType.THINKING, 
+                message="Action generated", 
+                data={"action": content}
+            )
+
+
             if not tool_calls:
                 if stream:
                     # If we should stream the final response, process it differently
@@ -325,6 +332,13 @@ class ReActAgent(Agent):
                         message="Task complete", 
                         data={"response": content}
                     )
+
+                
+                print("Current messages:")
+                for message in current_messages.get_messages():
+                    print("-----------------------------------------------------------------------------")
+                    for key, value in message.items():                    
+                        print(f"  {key}: {value}")
                 return
             
             yield AgentEvent(
@@ -420,8 +434,8 @@ class ReActAgent(Agent):
                 2) You have all the information needed to provide a final answer (if so, provide your comprehensive final response with no tool calls).
                 
                 Make sure to review all previous tool results when making your decision.
-                Make sure to that the final answer is conversational and easy to understand.
-                """)        
+                Make sure to that the final answer is conversational and easy to understand.""")
+               
         
         # If we've reached max iterations without a final answer, synthesize from what we have
         if iteration >= max_iterations:
@@ -447,6 +461,13 @@ class ReActAgent(Agent):
                     message="Task complete (max iterations reached)",
                     data={"response": final_output}
                 )
+                            
+            print("Current messages:")
+            for message in current_messages.get_messages():
+                print("-----------------------------------------------------------------------------")
+                for key, value in message.items():                    
+                    print(f"  {key}: {value}")
+                    
 
     
 

@@ -166,36 +166,34 @@ def main():
         # Run the agent
         try:
             # Run the agent
-            for event in agent.run(messages=memory, stream=True):
+            for event in agent.run(messages=memory, stream=True, model="gpt-4.1-mini"):
                 if event.event_type == AgentEventType.THINKING:
-                    print(Fore.LIGHTBLUE_EX+f"Agent is thinking: {event.message}"+Fore.RESET)
+                    print(Fore.LIGHTBLACK_EX + f"🧠 Thinking: {event.message}, {event.data}" + Fore.RESET)
                 
                 elif event.event_type == AgentEventType.TOOL_CALL:
-                    print(f"Tool call: {event.data['tool_name']}")
-                    # Here you could update a UI with tool call information
+                    print(Fore.LIGHTBLACK_EX + f"🔧 Tool: {event.data}" + Fore.RESET)
                     
                 elif event.event_type == AgentEventType.TOOL_RESULT:
-                    result = f"{event.data['result']}"
-                    print(f"Tool result: {event.data['tool_name']}: {result}...")
-                    # Update UI with tool result
+                    result = f"{event.data['result']}"                    
+                    print(Fore.LIGHTBLACK_EX + f"📋 Result: {event.data['tool_name']}, {result[:200]}..." + Fore.RESET)
                     
                 elif event.event_type == AgentEventType.PARTIAL_RESPONSE:
-                    # For streaming UI updates
+                    # Keep this visible as requested
                     token = event.data["token"]
-                    print(Fore.YELLOW+token+Fore.RESET, end="", flush=True)
+                    print(Fore.CYAN + token + Fore.RESET, end="", flush=True)
                     
                 elif event.event_type == AgentEventType.FINAL_RESPONSE:
                     print()
                     memory.add_assistant_message(event.data["response"])
                     
                 elif event.event_type == AgentEventType.ERROR:
-                    print(f"Error: {event.message}")
+                    print(Fore.LIGHTRED_EX + f"⚠️ Error: {event.message}" + Fore.RESET)
                     
                 elif event.event_type == AgentEventType.PROGRESS:
-                    print(f"Progress: {event.message}")
+                    print(Fore.LIGHTBLACK_EX + f"⏱️  Progress: {event.message}" + Fore.RESET)
             
         except Exception as e:
-            print(f"Error: {str(e)}")
+            print(Fore.LIGHTRED_EX + f"⚠️ Error: {str(e)}" + Fore.RESET)
 
 if __name__ == "__main__":
     main()
