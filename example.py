@@ -7,10 +7,11 @@ import json
 from typing import Any, Dict
 
 import requests
-from cpyo import OpenAIProvider, FunctionTool, Agent, ReActAgent, Messages
+from cpyo import OpenAIProvider, FunctionTool, Agent, ReActAgent, Messages, PythonTool
 from dotenv import load_dotenv
 import time
 from colorama import Fore, Back, Style, init
+
 
 from cpyo.event import AgentEventType
 # Initialize colorama (needed for Windows)
@@ -139,6 +140,11 @@ web_search = FunctionTool(
     function=web_search_impl,
 )
 
+python_executor = PythonTool(
+    name="python_executor",
+    description="Execute Python code. Results must be assigned to a variable named 'result'.",    
+)
+
 
 def main():
     memory = Messages()    
@@ -147,10 +153,11 @@ def main():
     provider = OpenAIProvider(api_key=api_key)
     agent = ReActAgent(
         name="ReActAgent",
-        description="An agent that can perform calculations and check traffic data.",
+        description="Helpfull assistant that can perform calculations and check traffic data and search the web.",
         provider=provider,
-        tools=[calculator, traffic_checker, web_search]        
+        tools=[calculator, traffic_checker, web_search, python_executor]        
     )
+
 
     
     while True:

@@ -286,7 +286,7 @@ class ReActAgent(Agent):
         # Setup action phase
         current_messages = messages.copy()
         current_messages.add_system_message(
-            f"""Based on your reasoning: {reasoning}            
+            f"""Based on your reasoning: "{reasoning}"
                                             
             Now take appropriate action to solve the problem. You can use multiple tools in sequence if needed.
             If you need to use multiple tools, execute them one at a time and use the results from previous tools to inform subsequent tool calls.            
