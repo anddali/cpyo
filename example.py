@@ -7,13 +7,11 @@ import json
 from typing import Any, Dict
 
 import requests
-from cpyo import OpenAIProvider, FunctionTool, Agent, ReActAgent, Messages, PythonTool
+from cpyo import OpenAIProvider, FunctionTool, Agent, ReActAgent, Messages, PythonTool, AgentEventType
 from dotenv import load_dotenv
 import time
 from colorama import Fore, Back, Style, init
 
-
-from cpyo.event import AgentEventType
 # Initialize colorama (needed for Windows)
 init()
 
@@ -31,7 +29,11 @@ def web_search_impl(query: str) -> Dict[str, Any]:
     """Search the web for real-time information on a query using Brave Search.
     
     Parameters:
-        query: Search query string
+        query: Search query string. Has to be a well-formed question or search term.
+
+    Returns:
+        A dictionary containing the search results, including titles, descriptions, URLs, and published dates.
+        If an error occurs, it returns a dictionary with an error message.
     """
     try:
         # You would need to get an API key from https://brave.com/search/api/
@@ -155,7 +157,7 @@ def main():
         name="ReActAgent",
         description="Agent that can perform calculations and check traffic data, execute python code and search the web.",
         provider=provider,
-        tools=[calculator, traffic_checker, web_search, python_executor]        
+        tools=[traffic_checker, web_search, python_executor]        
     )
 
 
@@ -173,7 +175,7 @@ def main():
         # Run the agent
         try:
             # Run the agent
-            for event in agent.run(messages=memory, stream=True, model="gpt-4.1-mini"):
+            for event in agent.run(messages=memory, stream=True, model="gpt-4.1-mini", temperature=0.7):
                 if event.event_type == AgentEventType.THINKING:
                     print(Fore.LIGHTBLACK_EX + f"🧠 Thinking: {event.message}, {event.data}" + Fore.RESET)
                 
@@ -191,13 +193,14 @@ def main():
                     
                 elif event.event_type == AgentEventType.FINAL_RESPONSE:
                     print()
-                    memory.add_assistant_message(event.data["response"])
+                    #print(event.data["response"])
+                    memory.add_assistant_message(event.data["content"])
                     
                 elif event.event_type == AgentEventType.ERROR:
-                    print(Fore.LIGHTRED_EX + f"⚠️ Error: {event.message}" + Fore.RESET)
+                    print(Fore.LIGHTRED_EX + f"⚠️ Error: {event.message} {event.data}" + Fore.RESET)
                     
                 elif event.event_type == AgentEventType.PROGRESS:
-                    print(Fore.LIGHTBLACK_EX + f"⏱️  Progress: {event.message}" + Fore.RESET)
+                    print(Fore.LIGHTBLACK_EX + f"⏱️  Progress: {event.message} {event.data}" + Fore.RESET)
             
         except Exception as e:
             print(Fore.LIGHTRED_EX + f"⚠️ Error: {str(e)}" + Fore.RESET)

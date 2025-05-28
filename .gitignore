@@ -105,4 +105,5 @@ venv.bak/
 # VS Code
 .vscode/
 
-app1.py
+audioapp.py
+dev.ipynb
