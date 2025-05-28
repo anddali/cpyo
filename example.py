@@ -7,7 +7,7 @@ import json
 from typing import Any, Dict
 
 import requests
-from cpyo import OpenAIProvider, FunctionTool, Agent, ReActAgent, Messages, PythonTool, AgentEventType
+from cpyo import OpenAIProvider, FunctionTool, Agent, ReActAgent, Messages, PythonTool, AgentEventType, tool
 from dotenv import load_dotenv
 import time
 from colorama import Fore, Back, Style, init
@@ -25,7 +25,8 @@ if not api_key:
     print("Please set the OPENAI_API_KEY environment variable.")
     exit(1)
 
-def web_search_impl(query: str) -> Dict[str, Any]:
+@tool
+def web_search(query: str) -> Dict[str, Any]:
     """Search the web for real-time information on a query using Brave Search.
     
     Parameters:
@@ -85,7 +86,7 @@ def web_search_impl(query: str) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Search failed: {str(e)}"}        
 
-def calculator_impl(operation: str, a: float, b: float):
+
     """Perform a basic calculation.
     
     Parameters:
@@ -105,8 +106,8 @@ def calculator_impl(operation: str, a: float, b: float):
         return {"result": a / b, "operation": f"{a} / {b}"}
     else:
         return {"error": f"Unknown operation: {operation}"}
-
-def get_traffic_data_from_current_location_to_destination_impl(current_location: str, destination: str):
+@tool
+def traffic_checker(current_location: str, destination: str):
     """Get traffic data from the current location to the destination using Distance Matrix API. Users home country is Ireland.
     
     Parameters:
@@ -114,37 +115,21 @@ def get_traffic_data_from_current_location_to_destination_impl(current_location:
         destination: Destination location
     """
     # Initialize Google Maps client
-    gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
-    
+    if not os.getenv("GOOGLE_MAPS_API_KEY"):
+        return {"error": "Please set the GOOGLE_MAPS_API_KEY environment variable."}
+    gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))    
     # Get traffic data
     try:
         now = datetime.datetime.now()
         directions_result = gmaps.distance_matrix(current_location, destination, mode="driving", departure_time=now)
         return directions_result
     except Exception as e:
-        return f"Error fetching traffic data: {str(e)}"
+        return {"error": f"Error fetching traffic data: {str(e)}"}
 
-calculator = FunctionTool(
-    name="calculator",
-    description="Perform basic calculations (add, subtract, multiply, divide)",
-    function=calculator_impl,
-)
-
-traffic_checker = FunctionTool(
-    name="get_traffic_data_from_current_location_to_destination",
-    description="Get traffic data from the current location to the destination using Distance Matrix API.",
-    function=get_traffic_data_from_current_location_to_destination_impl,
-)
-
-web_search = FunctionTool(
-    name="web_search",
-    description="Search the web for real-time, up-to-date information.",
-    function=web_search_impl,
-)
 
 python_executor = PythonTool(
     name="python_executor",
-    description="Execute Python code. Results must be assigned to a variable named 'result'.",    
+    description="Execute Python code",    
 )
 
 

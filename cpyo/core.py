@@ -15,7 +15,8 @@ class ToolType:
     """Enum for tool types."""
     FUNCTION = "function"
     AGENT = "agent"
-    
+
+
 class Tool(ABC):
     """Abstract base class for all tools.
 
@@ -205,6 +206,27 @@ class PythonTool(Tool):
         except Exception as e:
             raise RuntimeError(f"Error executing code: {e}")
 
+def tool(func=None, *, name: str = None, description: str = None):
+    """Decorator to convert a function into a FunctionTool."""
+    def decorator(f):
+        tool_name = name or f.__name__
+        tool_description = description or f.__doc__ or f"Tool: {f.__name__}"
+        
+        function_tool = FunctionTool(
+            name=tool_name,
+            description=tool_description,
+            function=f
+        )
+        
+        function_tool._original_function = f
+        return function_tool
+    
+    if func is None:
+        # Called with arguments: @tool(name="...", description="...")
+        return decorator
+    else:
+        # Called without arguments: @tool
+        return decorator(func)
 
 class Agent(Tool):
     """Base class for agents that can use multiple tools."""
