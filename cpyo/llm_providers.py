@@ -2,6 +2,10 @@ import os
 import json
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
+import logging
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class LLMProvider(ABC):
     """Abstract base class for different LLM providers."""
@@ -32,8 +36,10 @@ class OpenAIProvider(LLMProvider):
     
     def __init__(self, api_key=None):
         import openai
-        if api_key is None:
-            api_key = os.getenv("OPENAI_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            logger.error("Please set the OPENAI_API_KEY environment variable.")            
+            raise ValueError("OPENAI_API_KEY not set in environment variables.")        
         self.client = openai.OpenAI(api_key=api_key)
     
     def generate(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None, **kwargs) -> Any:
