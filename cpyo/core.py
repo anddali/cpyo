@@ -1,5 +1,3 @@
-
-
 from abc import ABC, abstractmethod
 import inspect
 from typing import Callable, Generator, List, Dict, Any, Optional, get_type_hints
@@ -9,6 +7,9 @@ from .messages import Message, Messages
 import datetime
 from .llm_providers import LLMProvider
 import datetime
+import os
+import re
+from string import Template
 
 
 class ToolType:
@@ -103,7 +104,6 @@ class Tool(ABC):
             
             # Extract description from function docstring if available
             if docstring:
-                import re
                 # Look for parameter descriptions in Args section
                 args_section_match = re.search(r'Args:\s*\n(.*?)(?=\n\s*(?:Returns|Raises|Note|Example|$))', docstring, re.DOTALL | re.IGNORECASE)
                 if args_section_match:
@@ -227,6 +227,215 @@ def tool(func=None, *, name: str = None, description: str = None):
     else:
         # Called without arguments: @tool
         return decorator(func)
+
+class ApiTool(Tool):
+    """Tool for making HTTP API requests with configurable parameters."""
+    
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        url: str,
+        method: str = "GET",
+        headers: Optional[Dict[str, str]] = None,
+        auth: Optional[Dict[str, Any]] = None,
+        timeout: int = 30,
+        body_template: Optional[str] = None,
+        query_params_template: Optional[Dict[str, str]] = None
+    ):
+        super().__init__(name, description, ToolType.FUNCTION, None)
+        self.url = url
+        self.method = method.upper()
+        self.headers = headers or {}
+        self.auth = auth
+        self.timeout = timeout
+        self.body_template = body_template
+        self.query_params_template = query_params_template or {}
+    
+    def _extract_template_variables(self, template_str: str) -> List[str]:
+        """Extract variable names from a template string."""
+        if not template_str:
+            return []
+        
+        # Find all {var} style placeholders - improved regex to handle JSON properly
+        # This pattern looks for { followed by word characters, then }
+        pattern = r'\{(\w+)\}'
+        matches = re.findall(pattern, template_str)
+        variables = []
+        for var_name in matches:
+            # Clean up the variable name and ensure it's valid
+            var_name = var_name.strip()
+            if var_name and var_name not in variables:
+                variables.append(var_name)
+        return variables
+    
+    def _get_all_template_variables(self) -> Dict[str, str]:
+        """Get all template variables from URL, body, query params, headers, and auth."""
+        variables = {}
+        
+        # Extract from URL
+        url_vars = self._extract_template_variables(self.url)
+        for var in url_vars:
+            variables[var] = "URL path parameter"
+        
+        # Extract from body template
+        if self.body_template:
+            body_vars = self._extract_template_variables(self.body_template)
+            for var in body_vars:
+                variables[var] = "Request body parameter"
+        
+        # Extract from query parameters
+        for key, value in self.query_params_template.items():
+            if isinstance(value, str):
+                query_vars = self._extract_template_variables(value)
+                for var in query_vars:
+                    variables[var] = f"Query parameter for '{key}'"
+        
+        # Extract from headers
+        for key, value in self.headers.items():
+            if isinstance(value, str):
+                header_vars = self._extract_template_variables(value)
+                for var in header_vars:
+                    variables[var] = f"Header parameter for '{key}'"
+        
+        # Extract from auth
+        if self.auth:
+            auth_vars = []
+            if "token" in self.auth:
+                auth_vars.extend(self._extract_template_variables(str(self.auth["token"])))
+            if "value" in self.auth:
+                auth_vars.extend(self._extract_template_variables(str(self.auth["value"])))
+            for var in auth_vars:
+                variables[var] = "Authentication parameter"
+        
+        return variables
+    
+    def to_schema(self) -> dict:
+        """Convert the ApiTool to OpenAI tool schema format using template variables."""
+        schema = {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        }
+        
+        # Get all template variables
+        template_vars = self._get_all_template_variables()
+        
+        # Add each variable as a parameter
+        for var_name, var_description in template_vars.items():
+            schema["function"]["parameters"]["properties"][var_name] = {
+                "type": "string",
+                "description": var_description
+            }
+            # All template variables are required
+            schema["function"]["parameters"]["required"].append(var_name)
+        
+        return schema
+    
+    def run(self, **kwargs) -> Dict[str, Any]:
+        """Make an HTTP API request with the provided parameters.
+        
+        Args:
+            **kwargs: Dynamic parameters that can be used to populate URL templates,
+                     body templates, query parameters, and headers.
+        
+        Returns:
+            Dict[str, Any]: API response data including status, headers, and content
+        """
+        try:
+            import requests
+            
+            # 1. Build the URL with template substitution
+            final_url = self.url.format(**kwargs)
+            
+            # 2. Build query parameters
+            params = {}
+            if self.query_params_template:
+                for key, value_template in self.query_params_template.items():
+                    if isinstance(value_template, str) and '{' in value_template:
+                        params[key] = value_template.format(**kwargs)
+                    else:
+                        params[key] = value_template
+            
+            # 3. Build headers with any template substitution
+            headers = self.headers.copy()
+            for key, value in headers.items():
+                if isinstance(value, str) and '{' in value:
+                    headers[key] = value.format(**kwargs)
+            
+            # 4. Handle authentication
+            if self.auth:
+                auth_type = self.auth.get("type", "").lower()
+                if auth_type == "bearer" and "token" in self.auth:
+                    token_template = self.auth["token"]
+                    if isinstance(token_template, str) and '{' in token_template:
+                        token = token_template.format(**kwargs)
+                    else:
+                        token = token_template
+                    headers["Authorization"] = f"Bearer {token}"
+                elif auth_type == "api_key" and "key" in self.auth and "value" in self.auth:
+                    key_name = self.auth["key"]
+                    value_template = self.auth["value"]
+                    if isinstance(value_template, str) and '{' in value_template:
+                        value = value_template.format(**kwargs)
+                    else:
+                        value = value_template
+                    headers[key_name] = value
+            
+            # 5. Build request body - use safer template substitution
+            data = None
+            if self.body_template and self.method in ["POST", "PUT", "PATCH"]:
+                # Use a safer approach for JSON templates
+                body_str = self.body_template
+                for key, value in kwargs.items():
+                    placeholder = "{" + key + "}"
+                    body_str = body_str.replace(placeholder, str(value))
+                
+                try:
+                    data = json.loads(body_str)
+                except json.JSONDecodeError:
+                    data = body_str
+            
+            # 6. Make the HTTP request
+            response = requests.request(
+                method=self.method,
+                url=final_url,
+                headers=headers,
+                params=params,
+                json=data if isinstance(data, dict) else None,
+                data=data if isinstance(data, str) else None,
+                timeout=self.timeout
+            )
+            
+            # 7. Process the response
+            result = {
+                "status_code": response.status_code,
+                "url": response.url,
+                "headers": dict(response.headers)
+            }
+            
+            # Try to parse JSON response, fall back to text
+            try:
+                result["data"] = response.json()
+            except json.JSONDecodeError:
+                result["data"] = response.text
+            
+            # 8. Check for HTTP errors and include in result
+            if not response.ok:
+                result["error"] = f"HTTP {response.status_code}: {response.reason}"
+            
+            return result
+            
+        except Exception as e:
+            return {"error": f"Request failed: {str(e)}"}
+
 
 class Agent(Tool):
     """Base class for agents that can use multiple tools."""
@@ -592,9 +801,10 @@ class ReActAgent(Agent):
                 
                 iterations += 1
 
-            
-            
-    
+
+
+
+
 
 
 

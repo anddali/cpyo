@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 import googlemaps
 import requests
-from .core import PythonTool, tool
+from .core import ApiTool, PythonTool, tool
 
 
 @tool
@@ -93,4 +93,13 @@ def traffic_checker(current_location: str, destination: str):
 python_executor = PythonTool(
     name="python_executor",
     description="Execute Python code",    
+)
+
+
+get_joke = ApiTool(
+    name="get_joke",
+    description="Get a random joke from the JokeAPI",
+    url="https://official-joke-api.appspot.com/random_joke",
+    method="GET",
+    headers={"Accept": "application/json"}
 )
