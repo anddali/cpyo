@@ -126,6 +126,12 @@ class Messages:
         new_memory.messages = self.messages.copy()
         return new_memory
     
+    def pop(self) -> Optional[Message]:
+        """Remove and return the last message from the memory."""
+        if self.messages:
+            return self.messages.pop()
+        return None
+    
     def add_message(self, message: Message) -> None:
         """Append another message to the messages."""
         self.messages.append(message)

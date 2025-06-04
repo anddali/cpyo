@@ -241,7 +241,8 @@ class ApiTool(Tool):
         auth: Optional[Dict[str, Any]] = None,
         timeout: int = 30,
         body_template: Optional[str] = None,
-        query_params_template: Optional[Dict[str, str]] = None
+        query_params_template: Optional[Dict[str, str]] = None,
+        parameter_descriptions: Optional[Dict[str, str]] = None
     ):
         super().__init__(name, description, ToolType.FUNCTION, None)
         self.url = url
@@ -251,6 +252,7 @@ class ApiTool(Tool):
         self.timeout = timeout
         self.body_template = body_template
         self.query_params_template = query_params_template or {}
+        self.parameter_descriptions = parameter_descriptions or {}
     
     def _extract_template_variables(self, template_str: str) -> List[str]:
         """Extract variable names from a template string."""
@@ -276,27 +278,31 @@ class ApiTool(Tool):
         # Extract from URL
         url_vars = self._extract_template_variables(self.url)
         for var in url_vars:
-            variables[var] = "URL path parameter"
+            # Use custom description if provided, otherwise use default
+            variables[var] = self.parameter_descriptions.get(var, "URL path parameter")
         
         # Extract from body template
         if self.body_template:
             body_vars = self._extract_template_variables(self.body_template)
             for var in body_vars:
-                variables[var] = "Request body parameter"
+                # Use custom description if provided, otherwise use default
+                variables[var] = self.parameter_descriptions.get(var, "Request body parameter")
         
         # Extract from query parameters
         for key, value in self.query_params_template.items():
             if isinstance(value, str):
                 query_vars = self._extract_template_variables(value)
                 for var in query_vars:
-                    variables[var] = f"Query parameter for '{key}'"
+                    # Use custom description if provided, otherwise use default
+                    variables[var] = self.parameter_descriptions.get(var, f"Query parameter for '{key}'")
         
         # Extract from headers
         for key, value in self.headers.items():
             if isinstance(value, str):
                 header_vars = self._extract_template_variables(value)
                 for var in header_vars:
-                    variables[var] = f"Header parameter for '{key}'"
+                    # Use custom description if provided, otherwise use default
+                    variables[var] = self.parameter_descriptions.get(var, f"Header parameter for '{key}'")
         
         # Extract from auth
         if self.auth:
@@ -306,7 +312,8 @@ class ApiTool(Tool):
             if "value" in self.auth:
                 auth_vars.extend(self._extract_template_variables(str(self.auth["value"])))
             for var in auth_vars:
-                variables[var] = "Authentication parameter"
+                # Use custom description if provided, otherwise use default
+                variables[var] = self.parameter_descriptions.get(var, "Authentication parameter")
         
         return variables
     
@@ -495,11 +502,11 @@ class Agent(Tool):
                             data={"token": token, "accumulated": full_response}
                         )
         
-        # After streaming is complete, send the final complete response
+        # After streaming is complete, send the final complete response        
         yield AgentEvent(
             AgentEventType.FINAL_RESPONSE,
             message="Task complete",
-            data={"response": full_response}
+            data={"content": full_response}
         )
 
     def run(self, **kwargs) -> Generator[AgentEvent, None, None]:
@@ -515,6 +522,12 @@ class Agent(Tool):
 class ReActAgent(Agent):
     """Agent that uses a combination of reasoning and action with improved progress reporting."""
     def __init__(self, name: str, description: str, provider: LLMProvider, tools: List[Tool]):
+        ask_user = FunctionTool(
+            name="ask_user",
+            description="Ask the user for additional information when you need clarification or missing parameters",
+            function=lambda question: {"question": question, "needs_user_input": True}
+        )
+        tools.append(ask_user)  # Add ask_user tool to the tools list
         super().__init__(name, description, provider, tools)
         self._token_buffer = []  # Buffer for collecting tokens when streaming
 
@@ -527,24 +540,35 @@ class ReActAgent(Agent):
             str: The planning response
         """
         yield AgentEvent(
-            AgentEventType.THINKING,
-            message="Thinking phase started",
+            AgentEventType.PROGRESS,
+            message="Planning...",
             data={}
-        )
+        )        
         session_context = f"*Session context*\nCurrent date and time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
         system_message = f"""{session_context}\n
-        You are task analysis and planning agent. 
-        Instructions: 
-        - Do not answer the user directly.
-        - First rewrite the users input, adding all necessary details and relevant context from previous turns. 
-        - Then, analyze the task and plan the next steps. If there is web search tool available, make sure to use it appropriately to get up to date information.
-        - Lay out which tools do you need to use from the available tools list. 
-        - Decide what are the parameters for each required tool? 
-        - You can use multiple tools. 
-        - Do not use any tools for general chatting.
-        - Only output the planning and not the response to the user.         
-       
-        NOW ANALYZE THE ASK AND PLAN THE NEXT STEPS."""
+You are a task analysis and planning agent for a ReAct system.
+
+Instructions:
+- Analyze the user's request and determine the best approach to fulfill it
+- If the request is clear and you have sufficient information, plan direct tool usage
+- Only ask for clarification when truly essential information is missing AND cannot be reasonably inferred
+- Consider if reasonable defaults or assumptions can be made instead of asking
+
+Planning Process:
+1. Rewrite the user's input with context from previous conversation turns
+2. Assess completeness: Can this be executed with available information?
+3. If YES: Plan the tool sequence needed to complete the task
+4. If NO: Identify ONLY the critical missing information that blocks execution
+5. Choose tools and specify their parameters
+6. For web search tools, use them when current/recent information is needed
+
+Guidelines:
+- Prefer action over questions when reasonable assumptions can be made
+- Simple, common requests usually don't need clarification
+- Focus on what CAN be done rather than what's missing
+- Only use ask_user tool when absolutely necessary
+
+Output your analysis and execution plan (Not the response to the user):"""
         
         messages.add_system_message(system_message)
                 
@@ -555,12 +579,12 @@ class ReActAgent(Agent):
         )
 
         content = self.provider.extract_content(result)
-        messages.clear()
+        #messages.clear()
         messages.add_system_message(system_message)
         messages.add_assistant_message(content)
         yield AgentEvent(
             AgentEventType.THINKING,
-            message="Planning phase complete",
+            message="Planning complete.",
             data={"content": content}
         )
 
@@ -593,8 +617,8 @@ class ReActAgent(Agent):
         )
         
         content = self.provider.extract_content(result)
-        tool_calls = self.provider.extract_tool_calls(result)
-        
+        tool_calls = self.provider.extract_tool_calls(result)        
+       
         messages.add_message(Message(role="assistant", content=content, tool_calls=tool_calls))
         return content, tool_calls
 
@@ -615,6 +639,26 @@ class ReActAgent(Agent):
                 Make sure to that the final answer is conversational and easy to understand.
                 If any tools threw an error, attempt to fix the error and re-run the tool, unless the error was due to hitting the rate limit or similar issue.""")
    
+    def _get_tool_parts(self, tool_call):
+        """Extract the function name and arguments from a tool call.
+        
+        Args:
+            tool_call (any): The tool call object
+        
+        Returns:
+            tuple: A tuple containing the function name and arguments
+        """
+        if hasattr(tool_call, "function"):
+            function_name = tool_call.function.name
+            function_args = json.loads(tool_call.function.arguments) if type(tool_call.function.arguments)== str else tool_call.function.arguments
+            tool_call_id = tool_call.id
+        else:
+            function_name = tool_call["function"]["name"]
+            function_args = json.loads(tool_call["function"]["arguments"]) if type(tool_call["function"]["arguments"])== str else tool_call["function"]["arguments"]
+            tool_call_id = tool_call.get("id", "0")
+        
+        return function_name, function_args, tool_call_id
+        
     def _execute_tools(self, messages: Messages, tool_calls: any, iteration: int) -> Generator[AgentEvent, None, None]:
         """Execute the tools based on the tool calls.
         
@@ -626,14 +670,7 @@ class ReActAgent(Agent):
         for tool_idx, tool_call in enumerate(tool_calls):
             try:
                 
-                if hasattr(tool_call, "function"):
-                    function_name = tool_call.function.name
-                    function_args = json.loads(tool_call.function.arguments) if type(tool_call.function.arguments)== str else tool_call.function.arguments
-                    tool_call_id = tool_call.id
-                else:
-                    function_name = tool_call["function"]["name"]
-                    function_args = json.loads(tool_call["function"]["arguments"]) if type(tool_call["function"]["arguments"])== str else tool_call["function"]["arguments"]
-                    tool_call_id = tool_call.get("id", "0")
+                function_name, function_args, tool_call_id = self._get_tool_parts(tool_call)
                 
                 yield AgentEvent(
                     AgentEventType.TOOL_CALL, 
@@ -703,9 +740,9 @@ class ReActAgent(Agent):
         )
         messages.add_system_message(f"This is the final answer phase. Synthesize the final answer from the messages above to answer the question. This should be formatted as the response to user. Use markdown formatting where appropriate.")
         
+        final_output = ""
         if stream:
-            # If streaming is enabled, use the streaming response method
-            final_output = ""
+            # If streaming is enabled, use the streaming response method            
             for chunk in self.provider.generate(
                 messages.get_messages(),
                 stream=True,
@@ -716,6 +753,7 @@ class ReActAgent(Agent):
                     if hasattr(chunk.choices[0], "delta") and hasattr(chunk.choices[0].delta, "content"):
                         token = chunk.choices[0].delta.content
                         if token:
+                            final_output += token
                             yield AgentEvent(
                                 AgentEventType.PARTIAL_RESPONSE,
                                 data={"token": token}
@@ -735,7 +773,7 @@ class ReActAgent(Agent):
             )
             
             final_output = self.provider.extract_content(response)
-            
+        
         yield AgentEvent(
             AgentEventType.FINAL_RESPONSE,
             message="Task complete",
@@ -769,8 +807,13 @@ class ReActAgent(Agent):
         iterations = 0
         max_iterations = 5
         while iterations < max_iterations:    
-                
-                content, tool_calls = self._take_action_phase(messages)
+                yield AgentEvent(
+                    AgentEventType.PROGRESS,
+                    message="Action phase...",
+                    data={}
+                )
+
+                content, tool_calls = self._take_action_phase(messages)               
 
                 yield AgentEvent(
                     AgentEventType.THINKING,
@@ -778,7 +821,19 @@ class ReActAgent(Agent):
                     data={"content": content, "tool_calls": f"{tool_calls}"}
                 )
 
-                if tool_calls:                                                
+                if tool_calls:
+                    # get tool call parts
+                    function_name, function_args, tool_call_id = self._get_tool_parts(tool_calls[0])
+                    if function_name == "ask_user":
+                        # If the first tool call is to ask the user, we need to handle that
+                        yield AgentEvent(
+                            AgentEventType.PROGRESS,
+                            message="Asking user for additional information",
+                            data={"content": content}
+                        )
+                        messages.pop()  # Remove the last assistant message                        
+                        yield from self._synthesize_final_answer(messages, stream=stream)
+                        return                                                
                     yield from self._execute_tools(messages, tool_calls, iterations)                    
                     self._observe_phase(messages)                    
                 else:
@@ -802,10 +857,150 @@ class ReActAgent(Agent):
                 iterations += 1
 
 
+# class KnowledgeAgent(Agent):
+#     """Agent that uses a web_search tool to gather additional information from the web before answering the question."""
+#     def __init__(self, name: str, description: str, provider: LLMProvider, tools: List[Tool]=[]):
+#         from .tools import web_search
+#         tools.append(web_search)
+#         super().__init__(name, description, provider, tools)
+
+#     def _parse_search_queries(self, content: str) -> List[str]:
+#         """Parse the search queries from the content.
+        
+#         Args:
+#             content (str): The content containing search queries in JSON format
+            
+#         Returns:
+#             List[str]: A list of search queries extracted from the content
+#         """
+#         try:
+#             # Attempt to parse the content as JSON
+#             queries = json.loads(content)
+#             if isinstance(queries["queries"], list):
+#                 return queries["queries"]
+#             else:
+#                 return []
+#         except json.JSONDecodeError:
+#             return []
+
+#     def _generate_search_queries(self, messages: Messages) -> List[str]:
+#         """Generate enhanced search queries based on the conversation messages.
+        
+#         Args:
+#             messages (Messages): The current message context
+            
+#         Returns:
+#             List[str]: A list of search queries generated from the conversation messages            
+#         """
+     
+#         session_context = f"*Session context*\nCurrent date and time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+#         system_message = f"""{session_context}\n
+# You are a search query generation agent for a Knowledge Agent system.
+
+# Instructions:
+# - Analyze the user's request and determine the best approach to fulfill it
+
+# Process:
+# 1. Rewrite the user's input with context from previous conversation turns
+# 2. Assess completeness: Can this be executed with available information?
+# 3. Generate a list of 5 search queries to find relevant information.
+
+# Output:
+# - Analysis and a list of search queries that can be used to gather additional information from the web. Response MUST use JSON format. Example:
+# {{
+#     "analysis": "The user is asking about the latest news on AI advancements.",
+#     "queries": [
+#         "latest AI advancements",
+#         "AI news October 2023",
+#         "AI breakthroughs 2023",
+#         "top AI technologies 2023",
+#         "AI industry trends"
+#     ]
+# }}
+# """
+#         messages = messages.copy()
+#         messages.add_system_message(system_message)
+                
+#         result = self.provider.generate(
+#             messages.get_messages(),
+#             tools=self.tool_schemas,
+#             tool_choice="none",
+#         )
+
+#         content = self.provider.extract_content(result)
+#         return content, self._parse_search_queries(content)
 
 
 
+#     def run(self, **kwargs) -> Generator[AgentEvent, None, None]:
+#         """Run the Knowledge Agent with the given input.
+        
+#         Args:
+#             **kwargs: Additional arguments including:
+#                 - messages: List of conversation messages
+#                 - stream: Boolean indicating whether to stream the final response
+                
+#         Yields:
+#             AgentEvent: Structured event objects providing updates on agent progress
+#         """
+#         stream = kwargs.pop("stream", False)
+#         messages = kwargs.pop("messages", None)
+        
+#         if messages is None or not isinstance(messages, Messages):
+#             yield AgentEvent(AgentEventType.ERROR, message="Invalid messages provided.")
+#             return           
 
+#         yield AgentEvent(
+#             AgentEventType.PROGRESS,
+#             message="Generating search queries",
+#             data={}
+#         )
+#         content, queries = self._generate_search_queries(messages) 
+#         yield AgentEvent(
+#             AgentEventType.PROGRESS,
+#             message="Generated search queries",
+#             data={"content": content}
+#         )
+#         yield AgentEvent(
+#             AgentEventType.PROGRESS,
+#             message="Generated search queries",
+#             data={"queries": queries}
+#         )
 
-
-
+#         if not queries:
+#             yield AgentEvent(
+#                 AgentEventType.FINAL_RESPONSE,
+#                 message="No search queries generated. Unable to proceed.",
+#                 data={"content": "No search queries generated. Unable to proceed."}
+#             )
+#             return
+        
+#         # execute the web search tool for each query
+#         for query in queries:
+#             yield AgentEvent(
+#                 AgentEventType.TOOL_CALL,
+#                 message=f"Executing web search for query: {query}",
+#                 data={"query": query}
+#             )
+            
+#             web_search_tool = self.tool_map.get("web_search")
+#             if not web_search_tool:
+#                 yield AgentEvent(
+#                     AgentEventType.ERROR,
+#                     message="Web search tool not found.",
+#                     data={}
+#                 )
+#                 return
+            
+#             result = web_search_tool.run(q=query, count=10)
+            
+#             yield AgentEvent(
+#                 AgentEventType.TOOL_RESULT,
+#                 message=f"Web search completed for query: {query}",
+#                 data={"result": result}
+#             )
+            
+#             # Add the result to the messages
+#             messages.add_message(Message(role="assistant", content=json.dumps(result)))
+        
+        
