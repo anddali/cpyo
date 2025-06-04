@@ -857,150 +857,150 @@ Output your analysis and execution plan (Not the response to the user):"""
                 iterations += 1
 
 
-# class KnowledgeAgent(Agent):
-#     """Agent that uses a web_search tool to gather additional information from the web before answering the question."""
-#     def __init__(self, name: str, description: str, provider: LLMProvider, tools: List[Tool]=[]):
-#         from .tools import web_search
-#         tools.append(web_search)
-#         super().__init__(name, description, provider, tools)
+class KnowledgeAgent(Agent):
+    """Agent that uses a web_search tool to gather additional information from the web before answering the question."""
+    def __init__(self, name: str, description: str, provider: LLMProvider, tools: List[Tool]=[]):
+        from .tools import web_search
+        tools.append(web_search)
+        super().__init__(name, description, provider, tools)
 
-#     def _parse_search_queries(self, content: str) -> List[str]:
-#         """Parse the search queries from the content.
+    def _parse_search_queries(self, content: str) -> List[str]:
+        """Parse the search queries from the content.
         
-#         Args:
-#             content (str): The content containing search queries in JSON format
+        Args:
+            content (str): The content containing search queries in JSON format
             
-#         Returns:
-#             List[str]: A list of search queries extracted from the content
-#         """
-#         try:
-#             # Attempt to parse the content as JSON
-#             queries = json.loads(content)
-#             if isinstance(queries["queries"], list):
-#                 return queries["queries"]
-#             else:
-#                 return []
-#         except json.JSONDecodeError:
-#             return []
+        Returns:
+            List[str]: A list of search queries extracted from the content
+        """
+        try:
+            # Attempt to parse the content as JSON
+            queries = json.loads(content)
+            if isinstance(queries["queries"], list):
+                return queries["queries"]
+            else:
+                return []
+        except json.JSONDecodeError:
+            return []
 
-#     def _generate_search_queries(self, messages: Messages) -> List[str]:
-#         """Generate enhanced search queries based on the conversation messages.
+    def _generate_search_queries(self, messages: Messages) -> List[str]:
+        """Generate enhanced search queries based on the conversation messages.
         
-#         Args:
-#             messages (Messages): The current message context
+        Args:
+            messages (Messages): The current message context
             
-#         Returns:
-#             List[str]: A list of search queries generated from the conversation messages            
-#         """
+        Returns:
+            List[str]: A list of search queries generated from the conversation messages            
+        """
      
-#         session_context = f"*Session context*\nCurrent date and time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
-#         system_message = f"""{session_context}\n
-# You are a search query generation agent for a Knowledge Agent system.
+        session_context = f"*Session context*\nCurrent date and time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}."
+        system_message = f"""{session_context}\n
+You are a search query generation agent for a Knowledge Agent system.
 
-# Instructions:
-# - Analyze the user's request and determine the best approach to fulfill it
+Instructions:
+- Analyze the user's request and determine the best approach to fulfill it
 
-# Process:
-# 1. Rewrite the user's input with context from previous conversation turns
-# 2. Assess completeness: Can this be executed with available information?
-# 3. Generate a list of 5 search queries to find relevant information.
+Process:
+1. Rewrite the user's input with context from previous conversation turns
+2. Assess completeness: Can this be executed with available information?
+3. Generate a list of 5 search queries to find relevant information.
 
-# Output:
-# - Analysis and a list of search queries that can be used to gather additional information from the web. Response MUST use JSON format. Example:
-# {{
-#     "analysis": "The user is asking about the latest news on AI advancements.",
-#     "queries": [
-#         "latest AI advancements",
-#         "AI news October 2023",
-#         "AI breakthroughs 2023",
-#         "top AI technologies 2023",
-#         "AI industry trends"
-#     ]
-# }}
-# """
-#         messages = messages.copy()
-#         messages.add_system_message(system_message)
+Output:
+- Analysis and a list of search queries that can be used to gather additional information from the web. Response MUST use JSON format. Example:
+{{
+    "analysis": "The user is asking about the latest news on AI advancements.",
+    "queries": [
+        "latest AI advancements",
+        "AI news October 2023",
+        "AI breakthroughs 2023",
+        "top AI technologies 2023",
+        "AI industry trends"
+    ]
+}}
+"""
+        messages = messages.copy()
+        messages.add_system_message(system_message)
                 
-#         result = self.provider.generate(
-#             messages.get_messages(),
-#             tools=self.tool_schemas,
-#             tool_choice="none",
-#         )
+        result = self.provider.generate(
+            messages.get_messages(),
+            tools=self.tool_schemas,
+            tool_choice="none",
+        )
 
-#         content = self.provider.extract_content(result)
-#         return content, self._parse_search_queries(content)
+        content = self.provider.extract_content(result)
+        return content, self._parse_search_queries(content)
 
 
 
-#     def run(self, **kwargs) -> Generator[AgentEvent, None, None]:
-#         """Run the Knowledge Agent with the given input.
+    def run(self, **kwargs) -> Generator[AgentEvent, None, None]:
+        """Run the Knowledge Agent with the given input.
         
-#         Args:
-#             **kwargs: Additional arguments including:
-#                 - messages: List of conversation messages
-#                 - stream: Boolean indicating whether to stream the final response
+        Args:
+            **kwargs: Additional arguments including:
+                - messages: List of conversation messages
+                - stream: Boolean indicating whether to stream the final response
                 
-#         Yields:
-#             AgentEvent: Structured event objects providing updates on agent progress
-#         """
-#         stream = kwargs.pop("stream", False)
-#         messages = kwargs.pop("messages", None)
+        Yields:
+            AgentEvent: Structured event objects providing updates on agent progress
+        """
+        stream = kwargs.pop("stream", False)
+        messages = kwargs.pop("messages", None)
         
-#         if messages is None or not isinstance(messages, Messages):
-#             yield AgentEvent(AgentEventType.ERROR, message="Invalid messages provided.")
-#             return           
+        if messages is None or not isinstance(messages, Messages):
+            yield AgentEvent(AgentEventType.ERROR, message="Invalid messages provided.")
+            return           
 
-#         yield AgentEvent(
-#             AgentEventType.PROGRESS,
-#             message="Generating search queries",
-#             data={}
-#         )
-#         content, queries = self._generate_search_queries(messages) 
-#         yield AgentEvent(
-#             AgentEventType.PROGRESS,
-#             message="Generated search queries",
-#             data={"content": content}
-#         )
-#         yield AgentEvent(
-#             AgentEventType.PROGRESS,
-#             message="Generated search queries",
-#             data={"queries": queries}
-#         )
+        yield AgentEvent(
+            AgentEventType.PROGRESS,
+            message="Generating search queries",
+            data={}
+        )
+        content, queries = self._generate_search_queries(messages) 
+        yield AgentEvent(
+            AgentEventType.PROGRESS,
+            message="Generated search queries",
+            data={"content": content}
+        )
+        yield AgentEvent(
+            AgentEventType.PROGRESS,
+            message="Generated search queries",
+            data={"queries": queries}
+        )
 
-#         if not queries:
-#             yield AgentEvent(
-#                 AgentEventType.FINAL_RESPONSE,
-#                 message="No search queries generated. Unable to proceed.",
-#                 data={"content": "No search queries generated. Unable to proceed."}
-#             )
-#             return
+        if not queries:
+            yield AgentEvent(
+                AgentEventType.FINAL_RESPONSE,
+                message="No search queries generated. Unable to proceed.",
+                data={"content": "No search queries generated. Unable to proceed."}
+            )
+            return
         
-#         # execute the web search tool for each query
-#         for query in queries:
-#             yield AgentEvent(
-#                 AgentEventType.TOOL_CALL,
-#                 message=f"Executing web search for query: {query}",
-#                 data={"query": query}
-#             )
+        # execute the web search tool for each query
+        for query in queries:
+            yield AgentEvent(
+                AgentEventType.TOOL_CALL,
+                message=f"Executing web search for query: {query}",
+                data={"query": query}
+            )
             
-#             web_search_tool = self.tool_map.get("web_search")
-#             if not web_search_tool:
-#                 yield AgentEvent(
-#                     AgentEventType.ERROR,
-#                     message="Web search tool not found.",
-#                     data={}
-#                 )
-#                 return
+            web_search_tool = self.tool_map.get("web_search")
+            if not web_search_tool:
+                yield AgentEvent(
+                    AgentEventType.ERROR,
+                    message="Web search tool not found.",
+                    data={}
+                )
+                return
             
-#             result = web_search_tool.run(q=query, count=10)
+            result = web_search_tool.run(q=query, count=10)
             
-#             yield AgentEvent(
-#                 AgentEventType.TOOL_RESULT,
-#                 message=f"Web search completed for query: {query}",
-#                 data={"result": result}
-#             )
+            yield AgentEvent(
+                AgentEventType.TOOL_RESULT,
+                message=f"Web search completed for query: {query}",
+                data={"result": result}
+            )
             
-#             # Add the result to the messages
-#             messages.add_message(Message(role="assistant", content=json.dumps(result)))
+            # Add the result to the messages
+            messages.add_message(Message(role="assistant", content=json.dumps(result)))
         
         
